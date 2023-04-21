@@ -1,0 +1,3 @@
+/futex_freebsd
+/futex_linux
+/futex_signal
