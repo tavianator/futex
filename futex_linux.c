@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 void futex_wait(atomic int *futex, int value) {
-	syscall(SYS_futex, futex, FUTEX_WAIT_PRIVATE, value);
+	syscall(SYS_futex, futex, FUTEX_WAIT_PRIVATE, value, NULL);
 }
 
 void futex_wake(atomic int *futex) {
