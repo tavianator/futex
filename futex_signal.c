@@ -13,14 +13,14 @@
 static sigset_t wake_mask;
 
 struct waiter {
-    pthread_t thread;
-    atomic int *futex;
-    struct waiter *prev, *next;
+	pthread_t thread;
+	atomic int *futex;
+	struct waiter *prev, *next;
 };
 
 struct waitq {
-    spinlock_t lock;
-    struct waiter list;
+	alignas(64) spinlock_t lock;
+	struct waiter list;
 };
 
 static void waitq_init(struct waitq *waitq) {
@@ -30,7 +30,7 @@ static void waitq_init(struct waitq *waitq) {
 	head->prev = head->next = head;
 }
 
-#define TABLE_SIZE 16
+#define TABLE_SIZE 64
 struct waitq table[TABLE_SIZE];
 
 void futex_init(void) {
@@ -45,11 +45,17 @@ void futex_init(void) {
 }
 
 static struct waitq *get_waitq(atomic int *futex) {
-        // Use the address of the futex as the hash key
-        uintptr_t i = (uintptr_t)futex;
-        // These bits are always zero, shift them out
-        i /= alignof(atomic int);
-        return &table[i % TABLE_SIZE];
+	// Use the address of the futex as the hash key
+	uintptr_t i = (uintptr_t)futex;
+
+	// https://nullprogram.com/blog/2018/07/31/
+	i ^= i >> 16;
+	i *= 0x45d9f3bU;
+	i ^= i >> 16;
+	i *= 0x45d9f3bU;
+	i ^= i >> 16;
+
+	return &table[i % TABLE_SIZE];
 }
 
 void futex_wait(atomic int *futex, int value) {
