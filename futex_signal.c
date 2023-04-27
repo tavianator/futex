@@ -14,7 +14,7 @@ static sigset_t wake_mask;
 
 struct waiter {
 	pthread_t thread;
-	atomic int *futex;
+	uintptr_t addr;
 	struct waiter *prev, *next;
 };
 
@@ -44,9 +44,8 @@ void futex_init(void) {
 	}
 }
 
-static struct waitq *get_waitq(atomic int *futex) {
-	// Use the address of the futex as the hash key
-	uintptr_t i = (uintptr_t)futex;
+static struct waitq *get_waitq(uintptr_t addr) {
+	uintptr_t i = addr;
 
 	// https://nullprogram.com/blog/2018/07/31/
 	i ^= i >> 16;
@@ -59,7 +58,8 @@ static struct waitq *get_waitq(atomic int *futex) {
 }
 
 void futex_wait(atomic int *futex, int value) {
-	struct waitq *waitq = get_waitq(futex);
+	uintptr_t addr = (uintptr_t)futex;
+	struct waitq *waitq = get_waitq(addr);
 	while (!spin_trylock(&waitq->lock)) {
 		if (load(futex, relaxed) != value) {
 			return;
@@ -72,7 +72,7 @@ void futex_wait(atomic int *futex, int value) {
 	// Store the wait queue entry on the stack
 	struct waiter waiter = {
 		.thread = pthread_self(),
-		.futex = futex,
+		.addr = addr,
 		.prev = head,
 		.next = head->next,
 	};
@@ -99,13 +99,14 @@ void futex_wait(atomic int *futex, int value) {
 }
 
 void futex_wake(atomic int *futex, int limit) {
-	struct waitq *waitq = get_waitq(futex);
+	uintptr_t addr = (uintptr_t)futex;
+	struct waitq *waitq = get_waitq(addr);
 	spin_lock(&waitq->lock);
 
 	int count = 0;
 	struct waiter *head = &waitq->list;
 	for (struct waiter *waiter = head->next; waiter != head && count < limit; waiter = waiter->next) {
-		if (waiter->futex == futex) {
+		if (waiter->addr == addr) {
 			pthread_kill(waiter->thread, WAKE_SIGNAL);
 			++count;
 		}
