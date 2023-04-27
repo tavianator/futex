@@ -8,12 +8,56 @@
 #include <signal.h>
 #include <stdalign.h>
 #include <stdint.h>
+#include <threads.h>
+
+#if __linux__
+
+static pid_t getpid_fast(void) {
+	static atomic pid_t pid = 0;
+
+	pid_t ret = load(&pid, relaxed);
+	if (ret == 0) {
+		ret = getpid();
+		store(&pid, ret, relaxed);
+	}
+
+	return ret;
+}
+
+typedef pid_t tid_t;
+
+static tid_t gettid_fast(void) {
+	static thread_local tid_t tid = 0;
+	if (tid == 0) {
+		tid = gettid();
+	}
+	return tid;
+}
+
+// pthread_kill() is expensive on Linux, so use tgkill() directly
+static void kill_thread(tid_t tid, int sig) {
+	tgkill(getpid_fast(), tid, sig);
+}
+
+#else
+
+typedef pthread_t tid_t;
+
+static tid_t gettid_fast(void) {
+	return pthread_self();
+}
+
+static void kill_thread(tid_t tid, int sig) {
+	pthread_kill(tid, sig);
+}
+
+#endif
 
 #define WAKE_SIGNAL SIGUSR1
 static sigset_t wake_mask;
 
 struct waiter {
-	pthread_t thread;
+	tid_t tid;
 	uintptr_t addr;
 	struct waiter *prev, *next;
 };
@@ -59,6 +103,12 @@ static struct waitq *get_waitq(uintptr_t addr) {
 
 void futex_wait(atomic int *futex, int value) {
 	uintptr_t addr = (uintptr_t)futex;
+
+	// Store the wait queue entry on the stack
+	struct waiter waiter;
+	waiter.tid = gettid_fast();
+	waiter.addr = addr;
+
 	struct waitq *waitq = get_waitq(addr);
 	while (!spin_trylock(&waitq->lock)) {
 		if (load(futex, relaxed) != value) {
@@ -67,17 +117,10 @@ void futex_wait(atomic int *futex, int value) {
 		spin_hint();
 	}
 
+	// Append the waiter to the list
 	struct waiter *head = &waitq->list;
-
-	// Store the wait queue entry on the stack
-	struct waiter waiter = {
-		.thread = pthread_self(),
-		.addr = addr,
-		.prev = head,
-		.next = head->next,
-	};
-
-	// Insert the waiter into the list
+	waiter.prev = head->prev;
+	waiter.next = head;
 	waiter.prev->next = &waiter;
 	waiter.next->prev = &waiter;
 
@@ -106,9 +149,18 @@ void futex_wake(atomic int *futex, int limit) {
 	int count = 0;
 	struct waiter *head = &waitq->list;
 	for (struct waiter *waiter = head->next; waiter != head && count < limit; waiter = waiter->next) {
-		if (waiter->addr == addr) {
-			pthread_kill(waiter->thread, WAKE_SIGNAL);
-			++count;
+		if (waiter->addr != addr) {
+			continue;
+		}
+
+		++count;
+		if (count >= limit || waiter->next == head) {
+			tid_t tid = waiter->tid;
+			spin_unlock(&waitq->lock);
+			kill_thread(tid, WAKE_SIGNAL);
+			return;
+		} else {
+			kill_thread(waiter->tid, WAKE_SIGNAL);
 		}
 	}
 
