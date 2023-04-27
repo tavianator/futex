@@ -12,7 +12,7 @@ void futex_init(void);
 // Atomically check if `*futex == value`, and if so, go to sleep
 void futex_wait(atomic int *futex, int value);
 
-// Wake up a thread currently waiting on `futex`
-void futex_wake(atomic int *futex);
+// Wake up `limit` threads currently waiting on `futex`
+void futex_wake(atomic int *futex, int limit);
 
 #endif // FUTEX_H

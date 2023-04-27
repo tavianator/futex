@@ -87,15 +87,16 @@ void futex_wait(atomic int *futex, int value) {
 	spin_unlock(&waitq->lock);
 }
 
-void futex_wake(atomic int *futex) {
+void futex_wake(atomic int *futex, int limit) {
 	struct waitq *waitq = get_waitq(futex);
 	spin_lock(&waitq->lock);
 
+	int count = 0;
 	struct waiter *head = &waitq->list;
-	for (struct waiter *waiter = head->next; waiter != head; waiter = waiter->next) {
+	for (struct waiter *waiter = head->next; waiter != head && count < limit; waiter = waiter->next) {
 		if (waiter->futex == futex) {
 			pthread_kill(waiter->thread, WAKE_SIGNAL);
-			break;
+			++count;
 		}
 	}
 

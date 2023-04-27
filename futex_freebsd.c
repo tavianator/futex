@@ -12,6 +12,6 @@ void futex_wait(atomic int *futex, int value) {
 	_umtx_op(futex, UMTX_OP_WAIT_UINT_PRIVATE, value, NULL, NULL);
 }
 
-void futex_wake(atomic int *futex) {
-	_umtx_op(futex, UMTX_OP_WAKE_PRIVATE, 1, NULL, NULL);
+void futex_wake(atomic int *futex, int limit) {
+	_umtx_op(futex, UMTX_OP_WAKE_PRIVATE, limit, NULL, NULL);
 }
