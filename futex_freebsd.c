@@ -6,6 +6,8 @@
 #include <sys/types.h>
 #include <sys/umtx.h>
 
+void futex_init(void) { }
+
 void futex_wait(atomic int *futex, int value) {
 	_umtx_op(futex, UMTX_OP_WAIT_UINT_PRIVATE, value, NULL, NULL);
 }

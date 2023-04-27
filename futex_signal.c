@@ -9,6 +9,9 @@
 #include <stdalign.h>
 #include <stdint.h>
 
+#define WAKE_SIGNAL SIGUSR1
+static sigset_t wake_mask;
+
 struct waiter {
     pthread_t thread;
     atomic int *futex;
@@ -20,8 +23,26 @@ struct waitq {
     struct waiter list;
 };
 
+static void waitq_init(struct waitq *waitq) {
+	spin_init(&waitq->lock);
+
+	struct waiter *head = &waitq->list;
+	head->prev = head->next = head;
+}
+
 #define TABLE_SIZE 16
 struct waitq table[TABLE_SIZE];
+
+void futex_init(void) {
+	// Block the signal so we can wait for it
+	sigemptyset(&wake_mask);
+	sigaddset(&wake_mask, WAKE_SIGNAL);
+	pthread_sigmask(SIG_BLOCK, &wake_mask, NULL);
+
+	for (int i = 0; i < TABLE_SIZE; ++i) {
+		waitq_init(&table[i]);
+	}
+}
 
 static struct waitq *get_waitq(atomic int *futex) {
         // Use the address of the futex as the hash key
@@ -31,19 +52,11 @@ static struct waitq *get_waitq(atomic int *futex) {
         return &table[i % TABLE_SIZE];
 }
 
-static struct waiter *waitq_head(struct waitq *waitq) {
-	struct waiter *head = &waitq->list;
-	if (!head->prev || !head->next) {
-		head->prev = head->next = head;
-	}
-	return head;
-}
-
 void futex_wait(atomic int *futex, int value) {
 	struct waitq *waitq = get_waitq(futex);
 	spin_lock(&waitq->lock);
 
-	struct waiter *head = waitq_head(waitq);
+	struct waiter *head = &waitq->list;
 
 	// Store the wait queue entry on the stack
 	struct waiter waiter = {
@@ -57,24 +70,15 @@ void futex_wait(atomic int *futex, int value) {
 	waiter.prev->next = &waiter;
 	waiter.next->prev = &waiter;
 
-	// Block the signal in the current thread so we can wait for it
-	sigset_t old_mask, mask;
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCONT);
-	pthread_sigmask(SIG_BLOCK, &mask, &old_mask);
-
 	while (load(futex, relaxed) == value) {
 		// Unlock the wait queue before we sleep
 		spin_unlock(&waitq->lock);
-		// Sleep until we receive SIGCONT
+		// Sleep until we receive WAKE_SIGNAL
 		int sig;
-		sigwait(&mask, &sig);
+		sigwait(&wake_mask, &sig);
 		// Re-lock the wait queue
 		spin_lock(&waitq->lock);
 	}
-
-	// Restore the old signal mask
-	pthread_sigmask(SIG_SETMASK, &old_mask, NULL);
 
 	// Remove ourselves from the wait queue
 	waiter.prev->next = waiter.next;
@@ -87,10 +91,10 @@ void futex_wake(atomic int *futex) {
 	struct waitq *waitq = get_waitq(futex);
 	spin_lock(&waitq->lock);
 
-	struct waiter *head = waitq_head(waitq);
+	struct waiter *head = &waitq->list;
 	for (struct waiter *waiter = head->next; waiter != head; waiter = waiter->next) {
 		if (waiter->futex == futex) {
-			pthread_kill(waiter->thread, SIGCONT);
+			pthread_kill(waiter->thread, WAKE_SIGNAL);
 			break;
 		}
 	}
