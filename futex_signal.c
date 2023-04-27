@@ -60,7 +60,12 @@ static struct waitq *get_waitq(atomic int *futex) {
 
 void futex_wait(atomic int *futex, int value) {
 	struct waitq *waitq = get_waitq(futex);
-	spin_lock(&waitq->lock);
+	while (!spin_trylock(&waitq->lock)) {
+		if (load(futex, relaxed) != value) {
+			return;
+		}
+		spin_hint();
+	}
 
 	struct waiter *head = &waitq->list;
 
