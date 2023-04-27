@@ -3,23 +3,25 @@
 
 CFLAGS := -std=c17 -pthread -Wall -g -O3 -flto -D_GNU_SOURCE
 
-ALL := futex_signal
+ALL := test_pthreads test_signal
 
 OS := $(shell uname)
 
 ifeq ($(OS),Linux)
-ALL += futex_linux
+ALL += test_linux
 endif
 
 ifeq ($(OS),FreeBSD)
-ALL += futex_freebsd
+ALL += test_freebsd
 endif
 
 all: $(ALL)
 .PHONY: all
 
-futex_%: main.c futex_%.c $(wildcard *.h)
+test_%: main.c futex_%.c $(wildcard *.h)
 	$(CC) $(CFLAGS) main.c futex_$*.c -o $@
+
+test_pthreads: CFLAGS += -DUSE_PTHREADS
 
 clean:
 	$(RM) $(ALL)

@@ -4,6 +4,19 @@
 #ifndef MUTEX_H
 #define MUTEX_H
 
+#if USE_PTHREADS
+
+#include <pthread.h>
+
+#define mutex_t pthread_mutex_t
+#define mutex_init(m) pthread_mutex_init(m, NULL)
+#define MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
+#define mutex_trylock(m) (!pthread_mutex_trylock(m))
+#define mutex_lock pthread_mutex_lock
+#define mutex_unlock pthread_mutex_unlock
+
+#else
+
 #include "atomic.h"
 #include "spin.h"
 #include "futex.h"
@@ -60,4 +73,5 @@ static inline void mutex_unlock(mutex_t *mutex) {
 	}
 }
 
+#endif // USE_PTHREADS
 #endif // MUTEX_H
