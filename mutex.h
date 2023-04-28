@@ -27,48 +27,53 @@ typedef struct {
 } mutex_t;
 
 enum {
-	MUTEX_UNLOCKED,
-	MUTEX_LOCKED,
-	MUTEX_SLEEPING,
+	MUTEX_LOCKED   = 1 << 0,
+	MUTEX_SLEEPING = 1 << 1,
 };
 
-#define MUTEX_INITIALIZER { .state = MUTEX_UNLOCKED }
+#define MUTEX_INITIALIZER { .state = 0 }
 
 static inline void mutex_init(mutex_t *mutex) {
-	atomic_init(&mutex->state, MUTEX_UNLOCKED);
+	atomic_init(&mutex->state, 0);
 }
 
-static inline bool mutex_trylock(mutex_t *mutex) {
+static bool mutex_trylock(mutex_t *mutex) {
 	int state = load(&mutex->state, relaxed);
-	return state == MUTEX_UNLOCKED
-		&& compare_exchange_weak(&mutex->state, &state, MUTEX_LOCKED, acquire, relaxed);
+	if (state & MUTEX_LOCKED) {
+		return false;
+	}
+
+	state = fetch_or(&mutex->state, MUTEX_LOCKED, relaxed);
+	if (state & MUTEX_LOCKED) {
+		return false;
+	}
+
+	thread_fence(&mutex->state, acquire);
+	return true;
 }
 
 static inline void mutex_lock(mutex_t *mutex) {
-	int state;
-
 #define MUTEX_SPINS 128
 	for (int i = 0; i < MUTEX_SPINS; ++i) {
-		state = MUTEX_UNLOCKED;
-		if (compare_exchange_weak(&mutex->state, &state, MUTEX_LOCKED, acquire, relaxed)) {
+		if (mutex_trylock(mutex)) {
 			return;
 		}
 		spin_hint();
 	}
 
-	if (state != MUTEX_SLEEPING) {
-		state = exchange(&mutex->state, MUTEX_SLEEPING, acquire);
+	int state = exchange(&mutex->state, MUTEX_LOCKED | MUTEX_SLEEPING, relaxed);
+
+	while (state & MUTEX_LOCKED) {
+		futex_wait(&mutex->state, MUTEX_LOCKED | MUTEX_SLEEPING);
+		state = exchange(&mutex->state, MUTEX_LOCKED | MUTEX_SLEEPING, relaxed);
 	}
 
-	while (state != MUTEX_UNLOCKED) {
-		futex_wait(&mutex->state, MUTEX_SLEEPING);
-		state = exchange(&mutex->state, MUTEX_SLEEPING, acquire);
-	}
+	thread_fence(&mutex->state, acquire);
 }
 
 static inline void mutex_unlock(mutex_t *mutex) {
-	int state = exchange(&mutex->state, MUTEX_UNLOCKED, release);
-	if (state == MUTEX_SLEEPING) {
+	int state = exchange(&mutex->state, 0, release);
+	if (state & MUTEX_SLEEPING) {
 		futex_wake(&mutex->state, 1);
 	}
 }

@@ -38,4 +38,19 @@
 #define fetch_and(obj, arg, order) \
 	atomic_fetch_and_explicit(obj, arg, memory_order_##order)
 
+// tsan doesn't support atomic_thread_fence()
+#ifdef __has_feature
+#  define TSAN __has_feature(thread_sanitizer)
+#else
+#  define TSAN __SANITIZE_THREAD__
+#endif
+
+#if TSAN
+#  define thread_fence(obj, order) \
+	fetch_add(obj, 0, order)
+#else
+#  define thread_fence(obj, order) \
+	atomic_thread_fence(memory_order_##order)
+#endif
+
 #endif // ATOMIC_H
