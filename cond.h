@@ -49,6 +49,10 @@ static inline void cond_wait(cond_t *cond, mutex_t *mutex) {
 	futex_wait(&cond->seq, seq);
 
 	mutex_lock(mutex);
+
+#if FUTEX_REQUEUE
+	fetch_or(&mutex->state, MUTEX_SLEEPING, relaxed);
+#endif
 }
 
 static inline void cond_signal(cond_t *cond, mutex_t *mutex) {
@@ -58,7 +62,12 @@ static inline void cond_signal(cond_t *cond, mutex_t *mutex) {
 
 static inline void cond_broadcast(cond_t *cond, mutex_t *mutex) {
 	fetch_add(&cond->seq, 1, relaxed);
+
+#if FUTEX_REQUEUE
+	futex_requeue(&cond->seq, 1, &mutex->state);
+#else
 	futex_wake(&cond->seq, INT_MAX);
+#endif
 }
 
 #endif // USE_PTHREADS

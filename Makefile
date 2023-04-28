@@ -22,6 +22,9 @@ test_%: main.c futex_%.c $(wildcard *.h)
 	$(CC) $(CFLAGS) main.c futex_$*.c -o $@
 
 test_pthreads: CFLAGS += -DUSE_PTHREADS
+test_signal: CFLAGS += -DUSE_SIGNAL
+test_linux: CFLAGS += -DUSE_LINUX
+test_freebsd: CFLAGS += -DUSE_FREEBSD
 
 clean:
 	$(RM) $(ALL)

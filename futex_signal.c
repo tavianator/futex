@@ -57,8 +57,10 @@ static void kill_thread(tid_t tid, int sig) {
 static sigset_t wake_mask;
 
 struct waiter {
+	spinlock_t lock;
 	tid_t tid;
 	uintptr_t addr;
+	struct waitq *waitq;
 	struct waiter *prev, *next;
 };
 
@@ -89,6 +91,7 @@ void futex_init(void) {
 }
 
 static struct waitq *get_waitq(uintptr_t addr) {
+	// Use the address of the futex as the hash key
 	uintptr_t i = addr;
 
 	// https://nullprogram.com/blog/2018/07/31/
@@ -109,6 +112,7 @@ void futex_wait(atomic int *futex, int value) {
 	waiter.tid = gettid_fast();
 	waiter.addr = addr;
 
+	// Get the wait queue and lock it
 	struct waitq *waitq = get_waitq(addr);
 	while (!spin_trylock(&waitq->lock)) {
 		if (load(futex, relaxed) != value) {
@@ -117,6 +121,10 @@ void futex_wait(atomic int *futex, int value) {
 		spin_hint();
 	}
 
+	waiter.waitq = waitq;
+	spin_init(&waiter.lock);
+	spin_lock(&waiter.lock);
+
 	// Append the waiter to the list
 	struct waiter *head = &waitq->list;
 	waiter.prev = head->prev;
@@ -124,20 +132,33 @@ void futex_wait(atomic int *futex, int value) {
 	waiter.prev->next = &waiter;
 	waiter.next->prev = &waiter;
 
-	while (load(futex, relaxed) == value) {
-		// Unlock the wait queue before we sleep
+	if (load(futex, relaxed) == value) {
+		// Unlock before we sleep
+		spin_unlock(&waiter.lock);
 		spin_unlock(&waitq->lock);
+
 		// Sleep until we receive WAKE_SIGNAL
 		int sig;
 		sigwait(&wake_mask, &sig);
-		// Re-lock the wait queue
+
+		// Re-lock the wait queue (which might have changed)
 		spin_lock(&waitq->lock);
+		spin_lock(&waiter.lock);
+		while (waitq != waiter.waitq) {
+			struct waitq *req = waiter.waitq;
+			spin_unlock(&waiter.lock);
+			spin_unlock(&waitq->lock);
+			waitq = req;
+			spin_lock(&waitq->lock);
+			spin_lock(&waiter.lock);
+		}
 	}
 
 	// Remove ourselves from the wait queue
 	waiter.prev->next = waiter.next;
 	waiter.next->prev = waiter.prev;
 
+	spin_unlock(&waiter.lock);
 	spin_unlock(&waitq->lock);
 }
 
@@ -165,4 +186,66 @@ void futex_wake(atomic int *futex, int limit) {
 	}
 
 	spin_unlock(&waitq->lock);
+}
+
+void futex_requeue(atomic int *futex, int limit, atomic int *other) {
+	uintptr_t addr = (uintptr_t)futex;
+	uintptr_t oaddr = (uintptr_t)other;
+
+	struct waitq *waitq = get_waitq(addr);
+	struct waitq *otherq = get_waitq(oaddr);
+
+	if (otherq < waitq) {
+		spin_lock(&otherq->lock);
+	}
+	spin_lock(&waitq->lock);
+	if (otherq > waitq) {
+		spin_lock(&otherq->lock);
+	}
+
+	int count = 0;
+	struct waiter *head = &waitq->list;
+	struct waiter *ohead = &otherq->list;
+	struct waiter *waiter = head->next;
+	while (waiter != head) {
+		struct waiter *next = waiter->next;
+
+		if (waiter->addr != addr) {
+			goto next;
+		}
+
+		if (count < limit) {
+			kill_thread(waiter->tid, WAKE_SIGNAL);
+			++count;
+			goto next;
+		}
+
+		spin_lock(&waiter->lock);
+
+		if (otherq != waitq) {
+			waiter->waitq = otherq;
+
+			// Remove from waitq
+			waiter->prev->next = waiter->next;
+			waiter->next->prev = waiter->prev;
+
+			// Insert into otherq
+			waiter->prev = ohead->prev;
+			waiter->next = ohead;
+			waiter->prev->next = waiter;
+			waiter->next->prev = waiter;
+		}
+
+		waiter->addr = oaddr;
+
+		spin_unlock(&waiter->lock);
+
+	next:
+		waiter = next;
+	}
+
+	spin_unlock(&waitq->lock);
+	if (otherq != waitq) {
+		spin_unlock(&otherq->lock);
+	}
 }

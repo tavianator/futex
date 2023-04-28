@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: 0BSD
 
 #include "futex.h"
+#include <limits.h>
 #include <stddef.h>
 #include <sys/types.h>
 #include <sys/umtx.h>
