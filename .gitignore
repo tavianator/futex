@@ -1,1 +1,4 @@
-/test_*
+/futex_freebsd
+/futex_linux
+/futex_pthreads
+/futex_signal
