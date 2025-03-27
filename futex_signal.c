@@ -95,11 +95,12 @@ static struct waitq *get_waitq(uintptr_t addr) {
 	uintptr_t i = addr;
 
 	// https://nullprogram.com/blog/2018/07/31/
+	// https://github.com/skeeto/hash-prospector/issues/19#issuecomment-1120105785
 	i ^= i >> 16;
-	i *= 0x45d9f3bU;
-	i ^= i >> 16;
-	i *= 0x45d9f3bU;
-	i ^= i >> 16;
+	i *= 0x21f0aaadU;
+	i ^= i >> 15;
+	i *= 0x735a2d97U;
+	i ^= i >> 15;
 
 	return &table[i % TABLE_SIZE];
 }
