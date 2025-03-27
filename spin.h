@@ -22,9 +22,17 @@ static inline bool spin_trylock(spinlock_t *lock) {
 	return !load(&lock->state, relaxed) && !exchange(&lock->state, true, acquire);
 }
 
-#if __GNUC__ && (__i386__ || __x86_64__)
-#  define spin_hint() __builtin_ia32_pause()
-#else
+#ifdef __has_builtin
+#  if __has_builtin(__builtin_ia32_pause)
+#    define spin_hint() __builtin_ia32_pause()
+#  elif __has_builtin(__builtin_arm_yield)
+#    define spin_hint() __builtin_arm_yield()
+#  elif __has_builtin(__builtin_riscv_pause)
+#    define spin_hint() __builtin_riscv_pause()
+#  endif
+#endif
+
+#ifndef spin_hint
 #  define spin_hint() ((void)0)
 #endif
 
